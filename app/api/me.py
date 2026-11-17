@@ -10,14 +10,13 @@ from fastapi import APIRouter, status
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from app.api.deps import ClientDep, CurrentUser, SessionDep
+from app.api.types import Gender, Text100
 from app.core.errors import error_responses
 from app.db.models import User
 from app.services import me as me_service
 
 router = APIRouter(prefix="/me", tags=["me"], responses=error_responses(401))
 
-Gender = Literal["female", "male", "other"]
-Text100 = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 BirthDate = Annotated[date | None, AfterValidator(me_service.validate_birth_date)]
 
 

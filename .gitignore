@@ -26,3 +26,7 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local file storage (member photos) and dev band secrets
+var/
+.dev-bands.json

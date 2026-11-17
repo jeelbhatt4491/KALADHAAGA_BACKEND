@@ -92,3 +92,27 @@ async def test_each_request_writes_one_access_line(app: FastAPI, log_dir: Path) 
     assert line["data"]["status"] == 404
     assert line["data"]["path"] == "/a/***"
     assert line["level"] == "WARNING"
+
+
+async def test_band_pairing_leaves_no_secrets_in_logs(
+    app: FastAPI, client: AsyncClient, log_dir: Path
+) -> None:
+    from tests.helpers import account_holder, add_contact, add_member, band_post, seed_band
+
+    auth = await account_holder(client, app)
+    member = await add_member(client, auth)
+    contact_phone = "+919812345678"
+    await add_contact(client, auth, member["id"], phone=contact_phone)
+    band = await seed_band(app)
+    await client.post(f"/devices/{band['band_id']}/vibrate-check", headers=auth)
+    [pair] = [m for m in app.state.providers.sms.sent if m.to == band["sim_msisdn"]]
+    nonce = pair.body.split()[-1]
+    await band_post(client, band, "/device/v1/pair-ack", {"nonce": nonce})
+
+    _lines(log_dir / "api.log")  # flush
+    logged = (log_dir / "api.log").read_text(encoding="utf-8") + (
+        log_dir / "audit-api.log"
+    ).read_text(encoding="utf-8")
+    assert "device.pair_acked" in logged and "KD1 PAIR ***" in logged
+    for secret in (nonce, band["secret"], contact_phone, band["sim_msisdn"]):
+        assert secret not in logged, secret

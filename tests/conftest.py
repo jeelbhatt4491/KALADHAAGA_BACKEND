@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -35,6 +36,9 @@ os.environ.update(
         "TELEPHONY_PROVIDER": "fake",
         "SMS_PROVIDER": "fake",
         "PUSH_PROVIDER": "fake",
+        "STORAGE_PROVIDER": "fake",
+        # Member photos written by tests go to a throwaway folder.
+        "MEDIA_DIR": tempfile.mkdtemp(prefix="kaladhaga-media-"),
     }
 )
 # Tests exercise real random codes (read back from the fake SMS provider).
@@ -117,7 +121,11 @@ async def session(app: FastAPI) -> AsyncIterator[AsyncSession]:
         yield db_session
 
 
-@pytest.fixture
-def phone() -> str:
+def new_phone() -> str:
     """A fresh, valid Indian mobile in E.164 (the database is shared within a run)."""
     return f"+9198{secrets.randbelow(10**8):08d}"
+
+
+@pytest.fixture
+def phone() -> str:
+    return new_phone()

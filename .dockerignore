@@ -7,3 +7,5 @@ logs
 .mypy_cache
 .ruff_cache
 .pytest_cache
+var
+.dev-bands.json

@@ -55,9 +55,33 @@ uv run alembic upgrade head
   number for 15 min. All are settings (`.env.example`).
 - Passwords: Argon2id. OTPs, refresh and reset tokens are stored only as HMACs.
 
+## Family, bands and contacts (B2)
+
+```bash
+docker compose exec api python -m scripts.seed_bands        # sold bands KD-0001..KD-0010
+uv run python scripts/band_sim.py heartbeat KD-0001          # act as the band
+uv run python scripts/band_sim.py pair KD-0001               # answer the app's vibrate check
+```
+
+- `seed_bands` writes each band's signing secret to `.dev-bands.json` (git-ignored), which
+  `band_sim.py` reads. `--reset` gives the bands new secrets and unlinks them; `--unsold`
+  creates bands that are not sold yet. Same thing over HTTP: `POST /dev/bands`.
+- `/dev/*` (seed bands, read a band's SMS inbox) exists only when `APP_ENV` is local or test.
+- Pairing over QR / typed code: the app calls `vibrate-check`, the backend texts the band
+  `KD1 PAIR <nonce>`, the band pulses and calls `/device/v1/pair-ack`, the user confirms
+  (`vibrate-check/confirm`), then `claim`. The claim's audit row records which proof existed.
+- Band requests are signed (`X-Device-Id`, `X-Timestamp`, `X-Signature` = HMAC-SHA256 of
+  timestamp + body), at most 5 minutes off, each signature accepted once. Band secrets are
+  stored encrypted (AES-GCM, `DEVICE_SECRET_KEY`).
+- Contact limits (5 per cohort, 2 guardians) are enforced by the service and again by a
+  database trigger. A member is **ready** with a claimed band, a Cohort 1 contact and a guardian.
+- Member photos: `STORAGE_PROVIDER=fake` keeps them under `MEDIA_DIR` (`var/media`, git-ignored)
+  and the API returns signed links that expire (`MEDIA_URL_TTL_S`).
+
 ## Providers
 
-`TELEPHONY_PROVIDER`, `SMS_PROVIDER`, `PUSH_PROVIDER` = `fake` (default) or the real one.
+`TELEPHONY_PROVIDER`, `SMS_PROVIDER`, `PUSH_PROVIDER`, `STORAGE_PROVIDER` = `fake` (default)
+or the real one.
 Fakes log what they would have done and keep it in memory for tests. `APP_ENV=test`
 refuses any real provider.
 

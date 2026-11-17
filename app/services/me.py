@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from sqlalchemy import Result, literal_column
+from sqlalchemy import Result, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client import ClientInfo
 from app.core.logging import get_logger
-from app.db.models import NotificationPreferences, PushToken, User
+from app.db.models import NotificationPreferences, PushToken, User, Wearer
+from app.services import invitations
 from app.services.audit import record_audit
 
 log = get_logger("kaladhaga.me")
@@ -30,8 +31,15 @@ class MeCounts:
 
 
 async def counts_for(session: AsyncSession, user: User) -> MeCounts:
-    # TODO(B2): count wearers, accepted invitations and pending invitations for this phone.
-    return MeCounts()
+    members = await session.scalar(
+        select(func.count()).select_from(Wearer).where(Wearer.account_id == user.id)
+    )
+    watching, pending = await invitations.counts(session, user)
+    return MeCounts(
+        family_member_count=int(members or 0),
+        watching_count=watching,
+        pending_invitation_count=pending,
+    )
 
 
 def onboarding_state(user: User, counts: MeCounts) -> OnboardingState:

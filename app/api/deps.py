@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -76,3 +77,19 @@ async def _current_user(
 
 
 CurrentUser = Annotated[User, Depends(_current_user)]
+
+
+PhotoUrl = Callable[[str | None], str | None]
+
+
+def _photo_url(request: Request, settings: SettingsDep, providers: ProvidersDep) -> PhotoUrl:
+    """Turns a stored photo key into a short-lived signed link (null stays null)."""
+    base = (settings.public_base_url or str(request.base_url)).rstrip("/")
+
+    def url(key: str | None) -> str | None:
+        return f"{base}{providers.storage.signed_path(key)}" if key else None
+
+    return url
+
+
+PhotoUrlDep = Annotated[PhotoUrl, Depends(_photo_url)]

@@ -15,7 +15,9 @@ Sibling projects (same parent folder):
 
 ## Build status
 - B0 foundation: done. B1 accounts (auth, /me, profile, notification settings, push tokens): done.
-- Next: B2 family, bands, contacts, invitations, band API basics. Then B3 alert engine.
+- B2 family members, bands (seed, availability, vibrate check, claim, deactivate), contacts,
+  invitations, watching, band API (signing, heartbeat, pair-ack), `scripts/band_sim.py`: done.
+- Next: B3 alert engine.
 
 ## Product rules (must hold everywhere)
 - **Account holder model.** One account holder (phone login) manages one or more **family members (wearers)**. Wearers often have no phone. Each band belongs to exactly one wearer; **one claimed band per wearer**.
@@ -75,12 +77,12 @@ docker-compose.yml
 - `push_tokens` — user_id, token (unique), platform (`android|ios`), last_seen_at
 - `notification_preferences` — user_id, band_offline, low_battery, test_reminders, firmware_updates (`emergency_alerts` is always true, not stored)
 - `audit_log` — append-only (DB trigger blocks UPDATE/DELETE/TRUNCATE): occurred_at, actor_type, actor_id, action, entity_type, entity_id, request_id, ip, details JSON (masked)
-- `wearers` — id, account_id → users, name, relationship, age, gender, photo_s3_key (optional), consent_at, is_self
+- `wearers` — id, account_id → users, name, relationship, age, gender, photo_key (optional), consent_at, consent_version (the wording agreed to; text + version in `services/family.py`), is_self (one per account)
 - `orders` / `order_items` — from the Shopify webhook; order_items has wearer_name, relationship, device_id (set at packing)
-- `devices` — id, band_id (unique, e.g. KD-7F3A9C21; the `{id}` in `/devices/{id}/...`), imei, sim_msisdn, device_secret_hash, status (`unsold` → `sold` → `claimed` → `deactivated`), wearer_id, firmware_version, battery_percent, signal (`good|fair|poor`), last_seen_at, activated_at, deactivated_at. `is_connected` = last_seen_at within a configured timeout.
+- `devices` — id, band_id (unique, e.g. KD-0001; the `{id}` in `/devices/{id}/...`), imei, sim_msisdn, secret_ciphertext (the signing secret, AES-GCM encrypted with `DEVICE_SECRET_KEY`: checking an HMAC needs the secret itself, so a hash can't work), status (`unsold` → `sold` → `claimed` → `deactivated`; a deactivated band can be claimed again), wearer_id, firmware_version, battery_percent, signal (`good|fair|poor`), last_seen_at, sold_at, activated_at (= `linked_at`), deactivated_at. `is_connected` = last_seen_at within `DEVICE_ONLINE_TIMEOUT_S`.
   - **partial unique index: one claimed device per wearer**
-- `device_pairings` — device_id, nonce_hash, expires_at, acked_at (`KD1 PAIR <nonce>` / `/device/v1/pair-ack`)
-- `contacts` — id, wearer_id, name, phone, relationship, cohort (1/2), priority (call order), city, proximity (`strong|moderate|low`), availability (`available|limited|unavailable`), is_guardian, is_account_holder, contact_user_id, invitation_status (`pending|accepted|declined`), invited_at, accepted_at; unique (wearer_id, phone)
+- `device_pairings` — device_id, requested_by_user_id, nonce_hash, expires_at, acked_at (band), confirmed_at + felt (user) (`KD1 PAIR <nonce>` / `/device/v1/pair-ack` / `vibrate-check/confirm`)
+- `contacts` — id, wearer_id, name, phone, relationship, cohort (1/2), priority (call order), city, proximity (`strong|moderate|low`), availability (`available|limited|unavailable`), is_guardian, is_account_holder, contact_user_id, invitation_status (`pending|accepted|declined`), invited_at, accepted_at, declined_at; unique (wearer_id, phone); unique (wearer_id, cohort, priority), deferred; a trigger enforces ≤5 per cohort and ≤2 guardians. Declined contacts don't count towards "ready".
 - `family_circles` / `family_circle_members` — **deferred**: same-account linking is derived from the account; tables come with cross-account linking.
 - `alerts` — id, device_id, wearer_id, mode (real/test), trigger (squeeze/scream), status, started_at, ended_at, map_token
 - `alert_end_confirmations` — alert_id, user_id, confirmed_at
@@ -101,6 +103,14 @@ docker-compose.yml
 - `GET /alerts` (history) is paged; `started_here` = a test whose session this user started.
 - Bands become `sold` via the Shopify webhook; for development a seed script creates sold bands.
 
+## B2 decisions (2026-11-17)
+- `POST /family/members` is multipart (the app sends a photo file) → 201. Members carry `ready` and `missing` (`band`, `cohort1_contact`, `guardian`). `band.battery_percent` is null until the band reports.
+- Photos are never public: signed links that expire (`/media/...` with the fake storage; S3 presigned URLs later).
+- Vibrate check → 202 `{pairing_id, expires_in}`; new `POST /devices/{id}/vibrate-check/confirm {felt}` → `{band_acked}`. Claim does not yet require a pairing (the Bluetooth path gives the backend no proof); the audit row records `proof`. TODO(security): require a proof once the firmware can sign a challenge over Bluetooth.
+- Every contact except the account holder's own entry gets an SMS invite. Accepting an invitation sets the role to `contact` if none was chosen.
+- A failed invite SMS doesn't undo the contact (it stays `pending` without `invited_at`); a resend endpoint comes later.
+- `/dev/*` exists only in local/test: seed bands, read a band's SMS inbox (for `band_sim.py`).
+
 ## Alert engine (summary)
 On `POST /device/v1/alert`: verify signature → de-duplicate open alert → create alert + first location + map token → respond within 1 s with `{alert_id, mode, conference_number}` → enqueue in parallel: family alert SMS to linked bands, SMS with map link to all contacts, push to app users, call round for Cohort 1 after a short hold window (start 10 s).
 Call rounds: ring the whole cohort at once; IVR "press 1 to listen"; on 1 → join the conference, mark joined, send the band a "connected" command on the first join. No join within the round timeout (start 40 s) → next cohort; alternate 1 → 2 → 1 until someone joins; once someone joined, no new rounds.
@@ -109,8 +119,8 @@ Ending: two confirmations as per the rules above → hang up, close conference, 
 All timings are config values.
 
 ## Band ↔ backend contract
-- HTTPS, JSON. Headers `X-Device-Id`, `X-Timestamp`, `X-Signature` = HMAC-SHA256(device secret, timestamp + body); reject timestamps more than 5 minutes off.
-- `POST /device/v1/alert`, `/location`, `/heartbeat`, `/pair-ack`; `GET /device/v1/alert/{id}/state`.
+- HTTPS, JSON. Headers `X-Device-Id`, `X-Timestamp` (unix s), `X-Signature` = hex HMAC-SHA256(device secret, timestamp + raw body); reject timestamps more than 5 minutes off; each signature is accepted once (replay cache in Redis). Any failure → 401 `invalid_signature` (the reason is only logged).
+- `POST /device/v1/alert`, `/location`, `/heartbeat`, `/pair-ack`; `GET /device/v1/alert/{id}/state`. Built in B2: `/heartbeat` `{battery_percent, signal, firmware_version?}` → `{server_time}`; `/pair-ack` `{nonce}` → 204.
 - Backend → band commands by SMS from our fixed number: `KD1 PAIR <nonce>`, `KD1 FAM <alert_id>`, `KD1 CONN <alert_id>`, `KD1 END <alert_id>`.
 - Field names are proposals until the firmware side confirms them; mark them TODO where unconfirmed.
 

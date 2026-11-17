@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     jwt_secret: SecretStr = SecretStr(_DEV_SECRET)
     # Keys the HMAC used to store OTPs, refresh tokens and reset tokens (never stored raw).
     token_hash_secret: SecretStr = SecretStr(_DEV_SECRET)
+    # Encrypts each band's signing secret at rest (AES-256-GCM; key = SHA-256 of this value).
+    device_secret_key: SecretStr = SecretStr(_DEV_SECRET)
+    # Signs the short-lived URLs of stored files (member photos).
+    media_url_secret: SecretStr = SecretStr(_DEV_SECRET)
 
     # ------------------------------------------------------------------ auth
     access_token_ttl_s: int = 15 * 60
@@ -86,6 +90,36 @@ class Settings(BaseSettings):
     # Exotel DLT template id of the OTP SMS (required for real sends).
     sms_otp_template_id: str | None = None
 
+    # ------------------------------------------------------------------ bands
+    # Signed band requests: X-Timestamp may be at most this far from server time.
+    device_signature_max_skew_s: int = 300
+    # A band counts as connected if it was heard from within this window.
+    # TODO(firmware): match the real heartbeat interval.
+    device_online_timeout_s: int = 30 * 60
+    # Vibrate check (`KD1 PAIR <nonce>` by SMS): how long the nonce is valid,
+    # and how often one band can be asked.
+    pairing_ttl_s: int = 5 * 60
+    vibrate_check_cooldown_s: int = 30
+    vibrate_check_max_per_hour: int = 10
+    # Band ID lookups per user per hour (stops walking through band IDs).
+    availability_max_per_hour: int = 60
+    # Newest band firmware; null = unknown (firmware_up_to_date is then null).
+    latest_firmware_version: str | None = None
+
+    # ------------------------------------------------------------------ contacts / invitations
+    # Optional link in the invitation SMS (app download page).
+    invite_link_url: str | None = None
+    sms_invite_template_id: str | None = None
+
+    # ------------------------------------------------------------------ storage (member photos)
+    # "fake" keeps files on local disk under MEDIA_DIR; "s3" arrives with hosting.
+    storage_provider: Literal["fake"] = "fake"
+    media_dir: Path = Path("var/media")
+    media_url_ttl_s: int = 60 * 60
+    photo_max_bytes: int = 5 * 1024 * 1024
+    # Absolute base for links the API returns (photo_url). Null = the request's own base URL.
+    public_base_url: str | None = None
+
     @property
     def is_test(self) -> bool:
         return self.app_env is AppEnv.TEST
@@ -93,6 +127,11 @@ class Settings(BaseSettings):
     @property
     def is_deployed(self) -> bool:
         return self.app_env in (AppEnv.STAGING, AppEnv.PRODUCTION)
+
+    @property
+    def dev_endpoints_enabled(self) -> bool:
+        """/dev/* (seed bands, read a band's SMS inbox): local and test only."""
+        return not self.is_deployed
 
     @model_validator(mode="after")
     def _check_safety(self) -> Settings:
@@ -113,6 +152,8 @@ class Settings(BaseSettings):
             for name, secret in (
                 ("JWT_SECRET", self.jwt_secret),
                 ("TOKEN_HASH_SECRET", self.token_hash_secret),
+                ("DEVICE_SECRET_KEY", self.device_secret_key),
+                ("MEDIA_URL_SECRET", self.media_url_secret),
             ):
                 if secret.get_secret_value() == _DEV_SECRET or len(secret.get_secret_value()) < 32:
                     raise ValueError(f"{name} must be set (32+ chars) in staging/production")
@@ -135,6 +176,8 @@ class Settings(BaseSettings):
             "telephony_provider": self.telephony_provider,
             "sms_provider": self.sms_provider,
             "push_provider": self.push_provider,
+            "storage_provider": self.storage_provider,
+            "dev_endpoints_enabled": self.dev_endpoints_enabled,
             "fixed_dev_code_enabled": self.otp_fixed_code is not None,
         }
 

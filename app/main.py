@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
-from app.api import auth, health, me
+from app.api import auth, dev, device_api, devices, family, health, invitations, me, media
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, get_logger
@@ -60,6 +60,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(me.router)
+    app.include_router(invitations.router)
+    app.include_router(family.router)
+    app.include_router(devices.router)
+    app.include_router(device_api.router)
+    app.include_router(media.router)
+    if settings.dev_endpoints_enabled:
+        app.include_router(dev.router)
     return app
 
 
