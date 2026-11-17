@@ -17,7 +17,8 @@ Sibling projects (same parent folder):
 - **Account holder model.** One account holder (phone login) manages one or more **family members (wearers)**. Wearers often have no phone. Each band belongs to exactly one wearer; **one active band per wearer**.
 - **No Aadhaar / DigiLocker in Phase 1.** Identity verification is postponed. Never store Aadhaar numbers.
 - **Contacts:** per wearer, Cohort 1 and Cohort 2, up to 5 each, ordered. Up to 2 guardians (contacts who accepted the guardian role). For a family member's band, the account holder is automatically in Cohort 1 and a guardian; for the account holder's own band ("self"), they are not.
-- **Band active** only when the wearer has ≥1 Cohort 1 contact and ≥1 guardian.
+- **Band ready** only when the wearer has ≥1 Cohort 1 contact and ≥1 guardian. ("Ready" is computed; it is not the device's `status`, which is `claimed` once linked to a wearer.)
+- **Guardians** are set directly by the account holder; acceptance is **not** needed for the band to be ready. The guardian gets an SMS invite and shows as `pending` until they accept in the app. A pending guardian can still confirm an alert has ended through a secure SMS link + OTP (built in B3).
 - **Family Circle:** all bands under one account are linked automatically (Family Alert vibration); bands from other accounts can be linked with approval.
 - **Ending an alert:** needs **any two** of: the account holder and that wearer's guardians. Nothing the band sends can end an alert. A **test** can be ended by the account holder alone.
 - **Test mode:** a 2-minute window; everything runs for real but every SMS/call/push says TEST; police features never run in test mode; limit 5 tests per band per month.
@@ -63,21 +64,38 @@ docker-compose.yml
 ```
 
 ## Data model (starting point — keep in sync with the app contract)
-- `users` — id, phone (unique, E.164), name, password_hash, phone_verified_at, created_at, updated_at
+- `users` — id, phone (unique, E.164), name, password_hash, phone_verified_at, role (`account_holder` | `contact` | null), date_of_birth, gender (`female|male|other`), city, created_at, updated_at
 - `otp_codes` — phone, purpose (signup/reset_password), code_hash (4 digits), expires_at, attempts (5-minute expiry, max 5 attempts)
+- `refresh_tokens` — user_id, token_hash, family_id (rotation chain), expires_at, revoked_at, replaced_by_id, user_agent, ip. Reusing a rotated token revokes the whole family.
+- `password_reset_tokens` — user_id, token_hash, expires_at, used_at (single use)
+- `push_tokens` — user_id, token (unique), platform (`android|ios`), last_seen_at
+- `notification_preferences` — user_id, band_offline, low_battery, test_reminders, firmware_updates (`emergency_alerts` is always true, not stored)
 - `audit_log` — append-only (DB trigger blocks UPDATE/DELETE/TRUNCATE): occurred_at, actor_type, actor_id, action, entity_type, entity_id, request_id, ip, details JSON (masked)
 - `wearers` — id, account_id → users, name, relationship, age, gender, photo_s3_key (optional), consent_at, is_self
 - `orders` / `order_items` — from the Shopify webhook; order_items has wearer_name, relationship, device_id (set at packing)
-- `devices` — id, qr_code / band_id (unique, e.g. KD-7F3A9C21), imei, sim_msisdn, device_secret_hash, status (`unsold` → `sold` → `active` → `deactivated`), wearer_id, firmware, battery_pct, last_seen_at
-  - **partial unique index: one active device per wearer**
-- `contacts` — id, wearer_id, name, phone, relationship, cohort (1/2), priority, area (city/area text), proximity answers, vicinity_score, is_guardian, contact_user_id, invitation status
-- `family_circles` / `family_circle_members`
+- `devices` — id, band_id (unique, e.g. KD-7F3A9C21; the `{id}` in `/devices/{id}/...`), imei, sim_msisdn, device_secret_hash, status (`unsold` → `sold` → `claimed` → `deactivated`), wearer_id, firmware_version, battery_percent, signal (`good|fair|poor`), last_seen_at, activated_at, deactivated_at. `is_connected` = last_seen_at within a configured timeout.
+  - **partial unique index: one claimed device per wearer**
+- `device_pairings` — device_id, nonce_hash, expires_at, acked_at (`KD1 PAIR <nonce>` / `/device/v1/pair-ack`)
+- `contacts` — id, wearer_id, name, phone, relationship, cohort (1/2), priority (call order), city, proximity (`strong|moderate|low`), availability (`available|limited|unavailable`), is_guardian, is_account_holder, contact_user_id, invitation_status (`pending|accepted|declined`), invited_at, accepted_at; unique (wearer_id, phone)
+- `family_circles` / `family_circle_members` — **deferred**: same-account linking is derived from the account; tables come with cross-account linking.
 - `alerts` — id, device_id, wearer_id, mode (real/test), trigger (squeeze/scream), status, started_at, ended_at, map_token
 - `alert_end_confirmations` — alert_id, user_id, confirmed_at
 - `alert_locations` — alert_id, lat, lon, accuracy_m, source, recorded_at
 - `alert_calls` — alert_id, contact_id, round, provider_call_id, status (queued/ringing/joined/no_answer), answered_at, joined_at
-- `alert_events` — alert_id, type, payload JSON, created_at (timeline)
-- `notification_preferences` — per user (emergency alerts always on)
+- `alert_events` — alert_id, type, payload JSON, created_at (timeline). App timeline kinds: `band_triggered|location_received|family_bands_vibrated|sms_sent|joined|second_vibration`; `second_vibration` = the band vibrating when the first person joins the call (`KD1 CONN`).
+- `test_sessions` — id, device_id, wearer_id, started_by_user_id, alert_id (once squeezed), status (waiting/running/cancelled/ended), started_at, squeezed_at, ended_at. Quota: 5 per band per calendar month.
+
+## Agreed API decisions (2026-11-17)
+- The API says **member** (`/family/members`, `member_id`); the database says `wearers`.
+- Login = phone + password; 4-digit OTP only for sign-up and password reset. Status codes: `invalid_credentials` 401, `account_not_found` 404, `account_exists` 409, `invalid_otp`/`otp_expired` 400, `too_many_attempts` 429 (+ `retry_after` seconds). OTP sends have a cooldown and an hourly cap; logins lock after repeated failures.
+- `POST /auth/logout` `{refresh_token, push_token?}` → 204; `POST /me/push-tokens` `{token, platform}` → 204.
+- Every error body is `{code, ..., request_id}`; request validation errors are 422 `{code: "validation_error", errors}`.
+- `POST /alerts/{id}/confirm-safe`: real alerts, any two of the account holder and the wearer's guardians (pending guardians too). `POST /alerts/{id}/end`: **tests only**, account holder alone; on a real alert → 403.
+- `GET /test-mode/quota?member_id=` → `{used, limit}` per band.
+- Invitations: `GET /me/invites`, `POST /me/invites/{id}/accept`, `POST /me/invites/{id}/decline`; contacts carry `invitation_status`.
+- The member-less `/contacts` routes are dropped; contacts are always under `/family/members/{id}/contacts`.
+- `GET /alerts` (history) is paged; `started_here` = a test whose session this user started.
+- Bands become `sold` via the Shopify webhook; for development a seed script creates sold bands.
 
 ## Alert engine (summary)
 On `POST /device/v1/alert`: verify signature → de-duplicate open alert → create alert + first location + map token → respond within 1 s with `{alert_id, mode, conference_number}` → enqueue in parallel: family alert SMS to linked bands, SMS with map link to all contacts, push to app users, call round for Cohort 1 after a short hold window (start 10 s).
