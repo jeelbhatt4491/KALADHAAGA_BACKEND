@@ -1,0 +1,76 @@
+# Local development: `docker compose up` starts api, worker, postgres and redis.
+# API: http://localhost:8000  (docs at /docs)
+# Postgres on host port 5433, Redis on 6380 (so they don't clash with local installs).
+
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+asyncpg://kaladhaga:kaladhaga@postgres:5432/kaladhaga
+    TEST_DATABASE_URL: postgresql+asyncpg://kaladhaga:kaladhaga@postgres:5432/kaladhaga_test
+    REDIS_URL: redis://redis:6379/0
+    LOG_DIR: /code/logs
+    # File change events don't cross from Windows into Linux containers; poll instead.
+    WATCHFILES_FORCE_POLLING: "true"
+  volumes:
+    - ./:/code
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *app
+    command: arq app.workers.settings.WorkerSettings --watch app
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kaladhaga
+      POSTGRES_PASSWORD: kaladhaga
+      POSTGRES_DB: kaladhaga
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kaladhaga -d kaladhaga"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Append-only file so queued jobs survive a restart.
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
