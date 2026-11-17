@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.context import request_id
@@ -42,6 +43,21 @@ class AppError(Exception):
         self.extra = extra
 
 
+class ErrorBody(BaseModel):
+    """Shape of every error response (for the API docs)."""
+
+    code: str
+    request_id: str | None = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    retry_after: int | None = None
+
+
+def error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
+    """`responses=` for a route: documents its error codes in /docs."""
+    return {status: {"model": ErrorBody} for status in statuses}
+
+
 def _body(code: str, **extra: Any) -> dict[str, Any]:
     return {"code": code, **extra, "request_id": request_id()}
 
@@ -51,7 +67,10 @@ async def _app_error(_: Request, exc: Exception) -> JSONResponse:
         raise TypeError(type(exc))
     level = log.error if exc.status_code >= 500 else log.warning
     level("request.app_error", code=exc.code, status=exc.status_code, **exc.extra)
-    return JSONResponse(_body(exc.code, **exc.extra), status_code=exc.status_code)
+    headers = None
+    if "retry_after" in exc.extra:
+        headers = {"Retry-After": str(exc.extra["retry_after"])}
+    return JSONResponse(_body(exc.code, **exc.extra), status_code=exc.status_code, headers=headers)
 
 
 async def _validation_error(_: Request, exc: Exception) -> JSONResponse:

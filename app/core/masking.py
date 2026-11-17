@@ -59,6 +59,8 @@ def mask_sms_body(body: str) -> str:
 
 
 def mask_phone(phone: str) -> str:
+    if "*" in phone:  # already masked (e.g. an audit row being logged)
+        return phone
     digits = re.sub(r"\D", "", phone)
     if len(digits) <= 4:
         return MASK

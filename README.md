@@ -44,6 +44,17 @@ uv run alembic revision --autogenerate -m "add wearers"   # then review the file
 uv run alembic upgrade head
 ```
 
+## Auth (B1)
+
+- Login: phone + password. A 4-digit OTP (5 min, 5 tries) verifies the number at sign-up and
+  for password reset. In docker compose every OTP is `1234` (`OTP_FIXED_CODE`, local only);
+  elsewhere the code is random and never logged.
+- Access token: JWT, 15 min. Refresh token: opaque, 30 days, rotated on every use; a reused
+  (already rotated) token ends that login on every device. Password reset ends all logins.
+- Limits: OTP resend cooldown 30 s and 5 sends/hour per phone; 5 failed logins lock the
+  number for 15 min. All are settings (`.env.example`).
+- Passwords: Argon2id. OTPs, refresh and reset tokens are stored only as HMACs.
+
 ## Providers
 
 `TELEPHONY_PROVIDER`, `SMS_PROVIDER`, `PUSH_PROVIDER` = `fake` (default) or the real one.

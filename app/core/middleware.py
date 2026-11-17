@@ -35,9 +35,10 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
-def _client_ip(scope: Scope) -> str | None:
-    # Behind a load balancer the first X-Forwarded-For entry is the client.
-    forwarded = _header(scope, b"x-forwarded-for")
+def client_ip_from_scope(scope: Scope, trust_forwarded_for: bool) -> str | None:
+    # Only behind our own load balancer is X-Forwarded-For trustworthy; otherwise
+    # anyone could write any IP into the logs and the audit trail.
+    forwarded = _header(scope, b"x-forwarded-for") if trust_forwarded_for else None
     if forwarded:
         return forwarded.split(",")[0].strip()
     client = scope.get("client")
@@ -45,8 +46,9 @@ def _client_ip(scope: Scope) -> str | None:
 
 
 class RequestLoggingMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, trust_forwarded_for: bool = False) -> None:
         self.app = app
+        self.trust_forwarded_for = trust_forwarded_for
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -57,6 +59,9 @@ class RequestLoggingMiddleware:
         rid = incoming if incoming and _VALID_REQUEST_ID.match(incoming) else uuid.uuid4().hex
         path = mask_text(scope.get("path", ""))
         method = scope.get("method", "WS")
+        client_ip = client_ip_from_scope(scope, self.trust_forwarded_for)
+        # Exposed to endpoints as request.state.client_ip (audit rows).
+        scope.setdefault("state", {})["client_ip"] = client_ip
         status_holder: dict[str, int] = {}
         started = time.perf_counter()
 
@@ -89,7 +94,7 @@ class RequestLoggingMiddleware:
                     "path": path,
                     "status": status,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                    "client_ip": _client_ip(scope),
+                    "client_ip": client_ip,
                     "user_agent": _header(scope, b"user-agent"),
                 }
                 if status >= 500:

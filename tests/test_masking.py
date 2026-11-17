@@ -65,3 +65,8 @@ def test_mask_sms_body_hides_otp_and_pair_nonce() -> None:
         "Your Kala Dhaga code is ***. Valid 5 min."
     )
     assert mask_sms_body("KD1 PAIR 9f8e7d6c") == "KD1 PAIR ***"
+
+
+def test_masking_is_idempotent() -> None:
+    once = mask_mapping({"phone": "+919876543210", "note": "call 9876543210"})
+    assert mask_mapping(once) == once == {"phone": "+91******3210", "note": "call ******3210"}

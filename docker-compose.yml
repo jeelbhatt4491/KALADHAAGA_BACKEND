@@ -12,6 +12,8 @@ x-app: &app
     TEST_DATABASE_URL: postgresql+asyncpg://kaladhaga:kaladhaga@postgres:5432/kaladhaga_test
     REDIS_URL: redis://redis:6379/0
     LOG_DIR: /code/logs
+    # Local dev only: every OTP is 1234 (same as the app's fake backend).
+    OTP_FIXED_CODE: "1234"
     # File change events don't cross from Windows into Linux containers; poll instead.
     WATCHFILES_FORCE_POLLING: "true"
   volumes:

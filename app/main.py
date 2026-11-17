@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
-from app.api import health
+from app.api import auth, health, me
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, get_logger
@@ -55,9 +55,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         lifespan=lifespan,
     )
-    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestLoggingMiddleware, trust_forwarded_for=settings.trust_forwarded_for)
     install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(me.router)
     return app
 
 

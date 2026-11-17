@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -36,6 +37,8 @@ os.environ.update(
         "PUSH_PROVIDER": "fake",
     }
 )
+# Tests exercise real random codes (read back from the fake SMS provider).
+os.environ.pop("OTP_FIXED_CODE", None)
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402
@@ -96,6 +99,8 @@ def settings() -> Settings:
 async def app(settings: Settings) -> AsyncIterator[FastAPI]:
     application = create_app(settings)
     async with application.router.lifespan_context(application):
+        # Rate-limit counters must not leak from one test into the next.
+        await application.state.redis.flushdb()
         yield application
 
 
@@ -110,3 +115,9 @@ async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
 async def session(app: FastAPI) -> AsyncIterator[AsyncSession]:
     async with app.state.session_factory() as db_session:
         yield db_session
+
+
+@pytest.fixture
+def phone() -> str:
+    """A fresh, valid Indian mobile in E.164 (the database is shared within a run)."""
+    return f"+9198{secrets.randbelow(10**8):08d}"

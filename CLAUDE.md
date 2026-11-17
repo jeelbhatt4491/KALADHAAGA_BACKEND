@@ -13,10 +13,14 @@ The backend is the **centre of the system**. The band talks only to it; the Flut
 Sibling projects (same parent folder):
 - `../kaladhaga_app` — Flutter app. **Its CLAUDE.md is the source of truth for the API contract** (endpoint paths, request/response field names). The backend implements that contract; if something must change, say so explicitly so the app can be updated too.
 
+## Build status
+- B0 foundation: done. B1 accounts (auth, /me, profile, notification settings, push tokens): done.
+- Next: B2 family, bands, contacts, invitations, band API basics. Then B3 alert engine.
+
 ## Product rules (must hold everywhere)
-- **Account holder model.** One account holder (phone login) manages one or more **family members (wearers)**. Wearers often have no phone. Each band belongs to exactly one wearer; **one active band per wearer**.
+- **Account holder model.** One account holder (phone login) manages one or more **family members (wearers)**. Wearers often have no phone. Each band belongs to exactly one wearer; **one claimed band per wearer**.
 - **No Aadhaar / DigiLocker in Phase 1.** Identity verification is postponed. Never store Aadhaar numbers.
-- **Contacts:** per wearer, Cohort 1 and Cohort 2, up to 5 each, ordered. Up to 2 guardians (contacts who accepted the guardian role). For a family member's band, the account holder is automatically in Cohort 1 and a guardian; for the account holder's own band ("self"), they are not.
+- **Contacts:** per wearer, Cohort 1 and Cohort 2, up to 5 each, ordered. Up to 2 guardians (set by the account holder; see Guardians below). For a family member's band, the account holder is automatically in Cohort 1 and a guardian; for the account holder's own band ("self"), they are not.
 - **Band ready** only when the wearer has ≥1 Cohort 1 contact and ≥1 guardian. ("Ready" is computed; it is not the device's `status`, which is `claimed` once linked to a wearer.)
 - **Guardians** are set directly by the account holder; acceptance is **not** needed for the band to be ready. The guardian gets an SMS invite and shows as `pending` until they accept in the app. A pending guardian can still confirm an alert has ended through a secure SMS link + OTP (built in B3).
 - **Family Circle:** all bands under one account are linked automatically (Family Alert vibration); bands from other accounts can be linked with approval.
