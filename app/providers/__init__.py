@@ -1,6 +1,6 @@
 """Provider selection. `TELEPHONY_PROVIDER`, `SMS_PROVIDER` and `PUSH_PROVIDER`
 choose `fake` or the real one. Real implementations arrive with the stages that
-need them (Exotel in B2, FCM in B2/B3); choosing one before then fails at
+need them (Exotel and FCM after the alert engine runs on fakes); choosing one before then fails at
 startup instead of silently doing nothing."""
 
 from __future__ import annotations

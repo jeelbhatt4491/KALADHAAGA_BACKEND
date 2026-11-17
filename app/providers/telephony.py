@@ -1,6 +1,6 @@
 """Telephony (Exotel in production): outbound calls into a conference with an
-IVR "press 1 to listen" step. The interface is a first cut; it will grow in B2
-(call rounds) once the Exotel flow is designed."""
+IVR "press 1 to listen" step. The interface is a first cut; it will grow with
+the alert engine (call rounds) once the Exotel flow is designed."""
 
 from __future__ import annotations
 
